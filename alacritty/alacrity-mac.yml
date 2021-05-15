@@ -167,9 +167,9 @@ hints:
   # URL launcher
   url:
     launcher:
-      program: xdg-open
+      program: open
       args: []
-      modifiers: Control
+      modifiers: Command
 
 debug:
   # Display the time it takes to redraw each frame.
