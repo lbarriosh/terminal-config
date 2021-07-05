@@ -7,22 +7,10 @@ window:
 font:
   size: 14.0
   use_thin_strokes: true
-  normal:
-    family: "SF Mono"
-    style: Medium
 
-  bold:
-    family: "SF Mono"
-    style: Heavy
-
-  italic:
-    family: "SF Mono"
-    style: Italic
-
-  bold_italic:
-    family: "SF Mono"
-    style: Bold Italic
-
+background_opacity: 0.80
+draw_bold_text_with_bright_colors: true
+window.dynamic_title: true
 
 bell:
   animation: EaseOutExpo
@@ -39,21 +27,13 @@ scrolling:
   multiplier: 3
 
 selection:
-  semantic_escape_chars: ',│`|:"'' ()[]{}<>'
+  semantic_escape_chars: ",│`|:\"' ()[]{}<>\t"
 
   # When set to `true`, selected text will be copied to the primary clipboard.
-  save_to_clipboard: false
+  save_to_clipboard: true
 
 cursor:
-  # Cursor style
-  #
-  # Values for `style`:
-  #   - ▇ Block
-  #   - _ Underline
-  #   - | Beam
   style: Block
-  # If this is `true`, the cursor will be rendered as a hollow box when the
-  # window is not focused.
   unfocused_hollow: true
 
 # Live config reload (changes require restart)
@@ -148,13 +128,13 @@ key_bindings:
   - { key: Delete,                        chars: "\x1b[3~"                     }
 
     # shortcuts for tmux. the leader key is control-b (0x02)
-  - { key: W,        mods: Command,       chars: "\x02&"                       }  # close tab (kill)
-  - { key: T,        mods: Command,       chars: "\x02c"                       }  # new tab
-  - { key: RBracket, mods: Command|Shift, chars: "\x02n"                       }  # select next tab
-  - { key: LBracket, mods: Command|Shift, chars: "\x02p"                       }  # select previous tab
-  - { key: RBracket, mods: Command,       chars: "\x02o"                       }  # select next pane
-  - { key: LBracket, mods: Command,       chars: "\x02;"                       }  # select last (previously used) pane
-  - { key: F,        mods: Command,       chars: "\x02/"                       }  # search (upwards) (see tmux.conf)
+  - { key: W,        mods: Alt,       chars: "\x02&"                       }  # close tab (kill)
+  - { key: T,        mods: Alt,       chars: "\x02c"                       }  # new tab
+  - { key: RBracket, mods: Alt|Shift, chars: "\x02n"                       }  # select next tab
+  - { key: LBracket, mods: Alt|Shift, chars: "\x02p"                       }  # select previous tab
+  - { key: RBracket, mods: Alt,       chars: "\x02o"                       }  # select next pane
+  - { key: LBracket, mods: Alt,       chars: "\x02;"                       }  # select last (previously used) pane
+  - { key: F,        mods: Alt,       chars: "\x02/"                       }  # search (upwards) (see tmux.conf)
 
 mouse:
   # Click settings
@@ -168,12 +148,13 @@ mouse:
   # If this is `true`, the cursor is temporarily hidden when typing.
   hide_when_typing: true
 
+hints:
   # URL launcher
   url:
     launcher:
       program: open
       args: []
-      modifiers: Control
+      modifiers: Command
 
 debug:
   # Display the time it takes to redraw each frame.
