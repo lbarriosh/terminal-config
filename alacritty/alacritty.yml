@@ -5,6 +5,8 @@ window:
   decorations: full
 
 font:
+  normal:
+    family: Fira Mono Medium
   size: 11.0
   use_thin_strokes: true
 
