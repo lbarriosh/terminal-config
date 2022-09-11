@@ -2,17 +2,17 @@
 
 window:
   dynamic_padding: true
-  decorations: full
+  decorations: Full
+  dynamic_title: true
+  opacity: 1.0
 
 font:
   normal:
-    family: Fira Mono Medium
+    family: monospace
   size: 11.0
   use_thin_strokes: true
 
 draw_bold_text_with_bright_colors: true
-window.dynamic_title: true
-window.opacity: 1.0
 
 bell:
   animation: EaseOutExpo
