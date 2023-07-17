@@ -4,7 +4,7 @@ window:
   dynamic_padding: true
   decorations: full
   dynamic_title: true
-  opacity: 0.80
+  opacity: 1.0
 
 font:
   size: 14.0
@@ -64,9 +64,6 @@ shell:
 # Directory the shell is started in. If this is unset, or `None`, the working
 # directory of the parent process will be used.
 working_directory: None
-
-# Send ESC (\x1b) before characters when alt is pressed.
-alt_send_esc: true
 
 key_bindings:
   - { key: V,        mods: Command,       action: Paste                        }
@@ -145,7 +142,7 @@ mouse:
   triple_click: { threshold: 300 }
 
   # If this is `true`, the cursor is temporarily hidden when typing.
-  hide_when_typing: true
+  hide_when_typing: false
 
 hints:
   # URL launcher
