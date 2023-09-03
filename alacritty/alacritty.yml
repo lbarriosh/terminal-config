@@ -40,22 +40,9 @@ cursor:
 # Live config reload (changes require restart)
 live_config_reload: true
 
-# Shell
-#
-# You can set `shell.program` to the path of your favorite shell, e.g. `/bin/fish`.
-# Entries in `shell.args` are passed unmodified as arguments to the shell.
-#
-# Default:
-#   - (macOS) /bin/bash --login
-#   - (Linux) user login shell
-#   - (Windows) powershell
-# shell:
-# program: /usr/bin/zsh
-#  args:
-#    - --login
-
+# Shell (zsh running tmux)
 shell:
-  program: /bin/zsh
+  program: /usr/bin/zsh
   args:
     - -l
     - -c
