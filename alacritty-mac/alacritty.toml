@@ -315,6 +315,10 @@ chars = "\u0002/"
 key = "F"
 mods = "Command"
 
+[[keyboard.bindings]]
+key = "NumpadEnter"
+chars = "\r"
+
 [mouse]
 hide_when_typing = false
 
