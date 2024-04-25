@@ -23,7 +23,7 @@ render_timer = false
 size = 11.0
 
 [font.normal]
-family = "SF Mono"
+family = "Source Code Pro"
 style = "Medium"
 
 [[keyboard.bindings]]
