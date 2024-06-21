@@ -20,10 +20,10 @@ print_events = false
 render_timer = false
 
 [font]
-size = 11.0
+size = 10.0
 
 [font.normal]
-family = "Source Code Pro"
+family = "Noto Sans Mono"
 style = "Medium"
 
 [[keyboard.bindings]]
