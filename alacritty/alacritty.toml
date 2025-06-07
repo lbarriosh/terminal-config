@@ -18,10 +18,10 @@ print_events = false
 render_timer = false
 
 [font]
-size = 10.0
+size = 11.0
 
 [font.normal]
-family = "Noto Sans Mono"
+family = "Cascadia Code"
 style = "Medium"
 
 [[keyboard.bindings]]
