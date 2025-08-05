@@ -15,11 +15,8 @@ zmodule utility
 # Prompt
 #
 
-# Exposes to prompts how long the last command took to execute, used by asciiship.
-# zmodule duration-info
-# Exposes git repository status information to prompts, used by asciiship.
+# The git-info module is required by the steeef prompt
 zmodule git-info
-# A heavily reduced, ASCII-only version of the Spaceship and Starship prompts.
 zmodule steeef
 
 #
@@ -29,4 +26,3 @@ zmodule steeef
 # Fish-like history search (up arrow) for Zsh.
 # zsh-users/zsh-history-substring-search must be sourced after zsh-users/zsh-syntax-highlighting
 zmodule zsh-users/zsh-history-substring-search
-
