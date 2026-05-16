@@ -41,7 +41,7 @@ function sshAddToKeychain() {
 eval "$(ssh-agent -s > /dev/null)"
 
 # Parameterize this via ~/.zshenv in your machine
-if [ -z "$DISABLE_ASDF" ] || [ "$DISABLE_ASDF" == false ]; then
+if [ -z "$DISABLE_ASDF" ] || [ "$DISABLE_ASDF" = false ]; then
     export PATH="$HOME/.local/bin/:$HOME/.asdf/shims:$PATH"
     . ~/.asdf/plugins/java/set-java-home.zsh
 fi
