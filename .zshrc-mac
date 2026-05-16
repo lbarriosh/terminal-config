@@ -24,9 +24,9 @@ fi
 # Initialize modules.
 source ${ZIM_HOME}/init.zsh
 
-# --------------------
-# Custom configuration
-# --------------------
+# ------------------------------------------------
+# Custom configuration, shared across all machines
+# ------------------------------------------------
 
 function sshAddToKeychain() {
     if [ -z "$1" ]; then
@@ -48,3 +48,12 @@ fi
 
 # Custom aliases
 alias gl='git log --abbrev-commit'
+
+# ----------------------------------------------
+# Custom configuration, specific to this machine
+# ----------------------------------------------
+
+LOCAL_ZSHRC_CONFIG="$HOME/.zshrc-local"
+if [ -f "$LOCAL_ZSHRC_CONFIG" ]; then
+    source "$LOCAL_ZSHRC_CONFIG"
+fi
