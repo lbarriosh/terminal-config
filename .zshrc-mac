@@ -1,0 +1,50 @@
+# -----------------
+# Zsh configuration
+# -----------------
+
+# History
+setopt HIST_IGNORE_ALL_DUPS
+HISTSIZE=1000
+SAVEHIST=1000
+
+# Emacs key bindings, separator tweaks, zsh syntax highlighting
+WORDCHARS=${WORDCHARS//[\/]}
+bindkey -e
+ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets)
+
+# -------------------
+# Zim version manager
+# -------------------
+
+ZIM_HOME=${ZDOTDIR:-${HOME}}/.zim
+# Install missing modules and update ${ZIM_HOME}/init.zsh if missing or outdated.
+if [[ ! ${ZIM_HOME}/init.zsh -nt ${ZIM_CONFIG_FILE:-${ZDOTDIR:-${HOME}}/.zimrc} ]]; then
+  source /opt/homebrew/opt/zimfw/share/zimfw.zsh init
+fi
+# Initialize modules.
+source ${ZIM_HOME}/init.zsh
+
+# --------------------
+# Custom configuration
+# --------------------
+
+function sshAddToKeychain() {
+    if [ -z "$1" ]; then
+        echo "The private key path is required"
+        return 1
+    fi
+
+    env APPLE_SSH_ADD_BEHAVIOR=macos ssh-add -K "$1"
+} 
+
+# Start the SSH agent if it's not running
+eval "$(ssh-agent -s > /dev/null)"
+
+# Parameterize this via ~/.zshenv in your machine
+if [ -z "$ENABLE_ASDF" ] || [ "$ENABLE_ASDF" == true ]; then
+    export PATH="$HOME/.local/bin/:$HOME/.asdf/shims:$PATH"
+    . ~/.asdf/plugins/java/set-java-home.zsh
+fi
+
+# Custom aliases
+alias gl='git log --abbrev-commit'
