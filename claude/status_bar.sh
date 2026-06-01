@@ -1,0 +1,410 @@
+#!/usr/bin/env bash
+# Claude Code statusLine hook — outputs two lines:
+#   [Model] repo @branch | ctx [bar] N% | $cost
+#   Tasks [bar] N/N (~Xm left) | ✓N ⟳N ○N
+#
+# Requires: jq, git
+# Debug: STATUS_BAR_DEBUG=1 dumps the raw JSON payload to /tmp/claude_status_debug.json
+#
+# Performance notes:
+#   - The stdin payload is parsed by a single jq invocation (all fields + cost
+#     classification + token count in one pass); the human-readable cost/token
+#     formatting is done afterward with bash printf. No awk is used anywhere.
+#   - The EMA history is handled by a single jq invocation that diffs completed task
+#     IDs in-process and writes history.json ONLY when a completion actually changed,
+#     so a steady-state refresh performs zero disk writes.
+#   - Git info uses ONE call (rev-parse --show-toplevel --abbrev-ref HEAD): no
+#     working-tree scan, so repo size does not affect cost. Dirty/untracked
+#     state is intentionally not computed or shown.
+set -euo pipefail
+shopt -s extglob
+
+# ─── Configuration ────────────────────────────────────────────────────────────
+TASKS_DIR="${TASKS_DIR_OVERRIDE:-$HOME/.claude/tasks}"
+HISTORY_DIR="${HISTORY_DIR_OVERRIDE:-$HOME/.claude/status-bar}"
+HISTORY_FILE="$HISTORY_DIR/history.json"
+EMA_ALPHA="0.3"
+MIN_SAMPLES=3
+DONE_DISPLAY_SECS=30
+BAR_WIDTH=10
+MAX_HISTORY=200  # override with STATUS_BAR_MAX_HISTORY in your bash profile
+
+# ─── Dependencies ─────────────────────────────────────────────────────────────
+_check_deps() {
+    command -v jq >/dev/null 2>&1 || {
+        printf '[status_bar] missing required tool: jq\n' >&2
+        exit 1
+    }
+}
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+_build_bar() {
+    local pct="$1" width="${2:-$BAR_WIDTH}"
+    pct=$(( pct < 0 ? 0 : pct > 100 ? 100 : pct ))
+    local filled=$(( pct * width / 100 ))
+    local empty=$(( width - filled ))
+    local bar="[" i
+    for ((i = 0; i < filled; i++)); do bar+="█"; done
+    for ((i = 0; i < empty;  i++)); do bar+="░"; done
+    bar+="]"
+    printf '%s' "$bar"
+}
+
+_normalize_model() {
+    local raw="$1"
+    [[ -z "$raw" ]] && { printf 'Claude'; return; }
+    # Already a display name (contains spaces)
+    [[ "$raw" == *" "* ]] && { printf '%s' "$raw"; return; }
+    # Strip Bedrock ARN wrapper: anthropic.claude-...:version
+    local name="${raw#anthropic.}"
+    name="${name%%:*}"
+    # Strip date suffix (-YYYYMMDD) and trailing version (-v2, -v1) without spawning sed
+    name="${name//-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/}"
+    name="${name%-v*([0-9])}"
+    case "$name" in
+        claude-3-5-sonnet*) printf 'Claude 3.5 Sonnet' ;;
+        claude-3-5-haiku*)  printf 'Claude 3.5 Haiku'  ;;
+        claude-3-7-sonnet*) printf 'Claude 3.7 Sonnet' ;;
+        claude-3-opus*)     printf 'Claude 3 Opus'     ;;
+        claude-3-sonnet*)   printf 'Claude 3 Sonnet'   ;;
+        claude-3-haiku*)    printf 'Claude 3 Haiku'    ;;
+        claude-sonnet-4-6*) printf 'Claude Sonnet 4.6' ;;
+        claude-sonnet-4-5*) printf 'Claude Sonnet 4.5' ;;
+        claude-opus-4-8*)   printf 'Claude Opus 4.8'   ;;
+        claude-opus-4-7*)   printf 'Claude Opus 4.7'   ;;
+        claude-haiku-4-5*)  printf 'Claude Haiku 4.5'  ;;
+        claude-sonnet-4*)   printf 'Claude Sonnet 4'   ;;
+        claude-opus-4*)     printf 'Claude Opus 4'     ;;
+        claude-haiku-4*)    printf 'Claude Haiku 4'    ;;
+        *)  # generic: claude-foo-bar → Claude foo bar
+            local out="${name//-/ }"
+            printf '%s' "${out/#claude /Claude }" ;;
+    esac
+}
+
+_format_tokens() {
+    local n="$1"
+    if   (( n >= 1000000 )); then
+        printf '%d.%dM' "$(( n / 1000000 ))" "$(( (n % 1000000) / 100000 ))"
+    elif (( n >= 1000 )); then
+        printf '%dk' "$(( n / 1000 ))"
+    else
+        printf '%s' "$n"
+    fi
+}
+
+_format_time() {
+    # Expects an integer number of seconds.
+    local secs="$1"
+    if   (( secs < 10   )); then printf 'almost done'
+    elif (( secs < 60   )); then printf '~%ds left' "$secs"
+    elif (( secs < 3600 )); then
+        local m=$(( secs / 60 )) s=$(( secs % 60 ))
+        (( s == 0 )) && printf '~%dm left' "$m" \
+                     || printf '~%dm %ds left' "$m" "$s"
+    else
+        local h=$(( secs / 3600 )) m=$(( (secs % 3600) / 60 ))
+        (( m == 0 )) && printf '~%dh left' "$h" \
+                     || printf '~%dh %dm left' "$h" "$m"
+    fi
+}
+
+# ─── EMA history ──────────────────────────────────────────────────────────────
+# Args: $1 = newline-separated completed task IDs, $2 = remaining task count.
+# A single jq invocation diffs the current completed IDs against history.json,
+# records any genuinely-new completions, prunes to MAX_HISTORY, and recomputes
+# the EMA. history.json is rewritten ONLY when a completion changed, so an
+# unchanged refresh writes nothing to disk.
+# Prints one tab-separated summary line: ema  count  last_ts  est_secs  changed
+
+_update_ema() {
+    local completed_ids="$1" remaining="$2"
+
+    # Validate STATUS_BAR_MAX_HISTORY override
+    local max_history="$MAX_HISTORY"
+    if [[ -n "${STATUS_BAR_MAX_HISTORY:-}" ]]; then
+        if [[ "${STATUS_BAR_MAX_HISTORY}" =~ ^[1-9][0-9]*$ ]]; then
+            max_history="$STATUS_BAR_MAX_HISTORY"
+        else
+            printf '[status_bar] STATUS_BAR_MAX_HISTORY="%s" is invalid (must be a positive integer); using default %d\n' \
+                "$STATUS_BAR_MAX_HISTORY" "$MAX_HISTORY" >&2
+        fi
+    fi
+
+    local now; now="$(date +%s)"
+
+    # Feed history.json if present, otherwise an empty array.
+    local histarg
+    if [[ -f "$HISTORY_FILE" ]]; then
+        histarg=(--slurpfile hist "$HISTORY_FILE")
+    else
+        histarg=(--argjson hist '[]')
+    fi
+
+    local out
+    out="$(jq -nrc \
+        --arg     curids    "$completed_ids" \
+        "${histarg[@]}" \
+        --argjson now       "$now" \
+        --argjson alpha     "$EMA_ALPHA" \
+        --argjson max       "$max_history" \
+        --argjson remaining "$remaining" '
+        ($curids | split("\n") | map(select(length > 0)) | unique) as $cur |
+        (($hist | if type == "array" then .[0] else . end) // {}) as $h |
+        ($h.completions // [])      as $comps |
+        ($comps | map(.id))         as $known |
+        ($cur - $known)             as $newids |
+        ($newids | map({id: ., timestamp: $now})) as $new |
+        (($new | length) > 0)       as $changed |
+        (if $changed
+         then (($comps + $new) | sort_by(.timestamp))[-$max:]
+         else $comps end)          as $allc |
+        (if $changed
+         then reduce range(1; ($allc | length)) as $i (
+                  null;
+                  . as $ema |
+                  ($allc[$i].timestamp - $allc[$i-1].timestamp) as $raw |
+                  if $raw < 0 then $ema
+                  else
+                      (if $raw > 3600 then 3600 else $raw end) as $delta |
+                      if $ema == null then $delta
+                      else $alpha * $delta + (1 - $alpha) * $ema
+                      end
+                  end
+              )
+         else $h.ema_seconds end)  as $ema |
+        ($allc | length)           as $count |
+        (if $count > 0 then ([$allc[].timestamp] | max) else 0 end) as $last |
+        (if ($ema != null) then (($ema * $remaining) | floor) else "" end) as $est |
+        "\($ema // "")\t\($count)\t\($last)\t\($est)\t\($changed)",
+        (if $changed then {completions: $allc, ema_seconds: $ema} else empty end)
+    ' 2>/dev/null)" || out=""
+
+    [[ -z "$out" ]] && return
+
+    local summary="${out%%$'\n'*}"
+
+    # A second line is present only when a completion changed → persist it.
+    if [[ "$out" == *$'\n'* ]]; then
+        local doc="${out#*$'\n'}"
+        mkdir -p "$HISTORY_DIR" 2>/dev/null || true
+        if printf '%s\n' "$doc" > "${HISTORY_FILE}.tmp" 2>/dev/null; then
+            mv "${HISTORY_FILE}.tmp" "$HISTORY_FILE" 2>/dev/null || true
+        fi
+    fi
+
+    printf '%s\n' "$summary"
+}
+
+# ─── Task line ────────────────────────────────────────────────────────────────
+
+_render_task_line() {
+    [[ -d "$TASKS_DIR" ]] || return
+
+    local -a files=()
+    local f
+    while IFS= read -r -d '' f; do
+        files+=("$f")
+    done < <(find "$TASKS_DIR" -name '*.json' -print0 2>/dev/null)
+    [[ ${#files[@]} -eq 0 ]] && return
+
+    # One jq pass over every task file → "status<TAB>id" lines.
+    local raw
+    raw="$(jq -r '
+        (if type == "array" then .
+         elif type == "object" then
+           if   (.tasks | type) == "array" then .tasks
+           elif (.items | type) == "array" then .items
+           elif .status != null then [.]
+           else [] end
+         else [] end)
+        | .[]
+        | select(type == "object")
+        | (.status // "pending" | ascii_downcase
+           | if   (. == "completed" or . == "done" or . == "complete" or . == "finished")
+             then "completed"
+             elif (. == "in_progress" or . == "in-progress" or . == "active"
+                   or . == "working" or . == "started")
+             then "in_progress"
+             else "pending"
+             end) as $st
+        | "\($st)\t\(.id // .title // "unknown")"
+    ' "${files[@]}" 2>/dev/null)" || raw=""
+
+    local total=0 completed=0 in_prog=0 pending=0 completed_ids=""
+    local status id
+    while IFS=$'\t' read -r status id; do
+        [[ -z "$status" ]] && continue
+        total=$(( total + 1 ))
+        case "$status" in
+            completed)   completed=$(( completed + 1 )); completed_ids+="$id"$'\n' ;;
+            in_progress) in_prog=$(( in_prog + 1 )) ;;
+            *)           pending=$(( pending + 1 )) ;;
+        esac
+    done <<< "$raw"
+
+    [[ "$total" -eq 0 ]] && return
+
+    local remaining=$(( total - completed ))
+    (( remaining < 0 )) && remaining=0
+
+    # Single jq pass: records new completions (writing only on change) and
+    # returns the EMA summary.
+    local summary
+    summary="$(_update_ema "$completed_ids" "$remaining")" || summary=""
+
+    # Field 5 (changed flag) is consumed inside _update_ema; discard it here.
+    local ema count last est_secs
+    IFS=$'\t' read -r ema count last est_secs _ <<< "$summary" || true
+    [[ "$count" =~ ^[0-9]+$ ]] || count=0
+    [[ "$last"  =~ ^[0-9]+$ ]] || last=0
+
+    # All done — show message for DONE_DISPLAY_SECS seconds then disappear
+    if [[ "$completed" -eq "$total" ]]; then
+        local now elapsed
+        now="$(date +%s)"
+        elapsed=$(( now - last ))
+        if (( elapsed <= DONE_DISPLAY_SECS )); then
+            printf 'All done! (%d tasks)' "$total"
+        fi
+        return
+    fi
+
+    local pct=$(( total > 0 ? completed * 100 / total : 0 ))
+    local bar; bar="$(_build_bar "$pct")"
+
+    local time_str=""
+    if [[ -n "$ema" && -n "$est_secs" && "$count" -ge "$MIN_SAMPLES" ]]; then
+        time_str="$(_format_time "$est_secs")"
+    elif [[ "$total" -gt 1 ]]; then
+        time_str="calculating..."
+    fi
+
+    local line="Tasks $bar $completed/$total"
+    [[ -n "$time_str" ]] && line+=" ($time_str)"
+    line+=" | ✓$completed ⟳$in_prog ○$pending"
+
+    printf '%s' "$line"
+}
+
+# ─── Payload / git extraction ─────────────────────────────────────────────────
+# These two helpers return their results by assigning into the caller's `local`
+# variables via bash dynamic scoping (no subshell, no stdout parsing). The caller
+# (main) MUST pre-declare the listed output variables `local`; the helpers assign
+# them without `local` and keep only their own internal temporaries `local`.
+
+# Decodes the Claude Code stdin JSON with one jq pass.
+# Output variables (declared local by the caller):
+#   model_raw cwd pct cost cost_class token_count
+_parse_payload() {
+    local input="$1"
+
+    # Extract every stdin field with ONE jq pass. Order of emitted lines:
+    #   model_raw, cwd, pct, cost, cost_class, token_count
+    local payload
+    payload="$(jq -r '
+        (.cost.total_cost_usd // .session.cost_usd // .usage.total_cost_usd // 0) as $cost |
+        ((.context_window.used_percentage // 0) | floor)                          as $pct  |
+        (.context_window.used_tokens // 0)                                        as $used |
+        (.context_window.total_tokens // .context_window.max_tokens // 0)         as $total|
+        (if   $used > 0                       then $used
+         elif ($total > 0 and $pct > 0)       then (($pct * $total / 100) | floor)
+         else 0 end)                                                              as $tok  |
+        ((.model | objects | (.display_name // .id)) // (.model | strings) // ""),
+        (.workspace.current_dir // ""),
+        $pct,
+        $cost,
+        (if $cost > 0 then (if $cost < 0.01 then "sub" else "normal" end) else "none" end),
+        $tok
+    ' <<< "$input" 2>/dev/null)" || payload=""
+
+    # shellcheck disable=SC2034  # assigned into the caller's locals (dynamic scope)
+    {
+        IFS= read -r model_raw
+        IFS= read -r cwd
+        IFS= read -r pct
+        IFS= read -r cost
+        IFS= read -r cost_class
+        IFS= read -r token_count
+    } <<< "$payload" || true
+
+    # Guards: ensure numerics are sane
+    [[ "$pct"         =~ ^[0-9]+$          ]] || pct="0"
+    [[ "$cost"        =~ ^[0-9]+\.?[0-9]*$ ]] || cost="0"
+    [[ "$token_count" =~ ^[0-9]+$          ]] || token_count="0"
+    return 0
+}
+
+# Computes git repo/branch with a SINGLE git invocation (no disk writes, no
+# working-tree scan). `git rev-parse --show-toplevel --abbrev-ref HEAD` emits
+# the repo toplevel on line 1 and the branch name on line 2; a detached HEAD
+# prints "HEAD", and a repo with no commits (unborn branch) makes the whole
+# command fail — in that case we fall back to the cwd basename with no branch.
+# `dirty` is left untouched (always empty) so callers needing the variable for
+# line assembly keep working without change.
+# Output variables (declared local by the caller):
+#   repo_name branch dirty
+# shellcheck disable=SC2034  # repo_name/branch/dirty are the caller's locals (dynamic scope)
+_git_info() {
+    local cwd="$1"
+    local gitout
+    if [[ -n "${cwd:-}" ]] && gitout="$(git -C "$cwd" rev-parse --show-toplevel --abbrev-ref HEAD 2>/dev/null)"; then
+        local toplevel="${gitout%%$'\n'*}"
+        repo_name="${toplevel##*/}"
+        branch="${gitout#*$'\n'}"
+    else
+        repo_name="${cwd:-unknown}"
+        repo_name="${repo_name##*/}"
+        [[ -z "$repo_name" || "$repo_name" == "." ]] && repo_name="unknown"
+    fi
+    return 0
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+main() {
+    _check_deps
+
+    local input=""
+    IFS= read -r -d '' input || true
+
+    if [[ "${STATUS_BAR_DEBUG:-0}" == "1" ]]; then
+        printf '%s\n' "$input" > /tmp/claude_status_debug.json
+    fi
+
+    # ── Parse the stdin payload (jq) ───────────────────────────────────────────
+    local model_raw="" cwd="" pct="0" cost="0" cost_class="none" token_count="0"
+    _parse_payload "$input"
+
+    local model; model="$(_normalize_model "${model_raw:-}")"
+
+    # ── Git info (one invocation, no disk writes) ─────────────────────────────
+    local repo_name="" branch="" dirty=""
+    _git_info "$cwd"
+
+    # ── Context bar ───────────────────────────────────────────────────────────
+    local ctx_bar; ctx_bar="$(_build_bar "$pct")"
+
+    # ── Cost / token field ────────────────────────────────────────────────────
+    local cost_field=""
+    case "$cost_class" in
+        normal) cost_field="$(printf '$%.2f' "$cost")" ;;
+        sub)    cost_field="$(printf '$%.4f' "$cost")" ;;
+        none)   [[ "$token_count" -gt 0 ]] && cost_field="~$(_format_tokens "$token_count") tok" ;;
+    esac
+
+    # ── Line 1 ────────────────────────────────────────────────────────────────
+    local line1="[${model}] ${repo_name}"
+    [[ -n "$branch" ]] && line1+=" @${branch}${dirty}"
+    line1+=" | ctx ${ctx_bar} ${pct}%"
+    [[ -n "$cost_field" ]] && line1+=" | $cost_field"
+    printf '%s\n' "$line1"
+
+    # ── Line 2: task progress ─────────────────────────────────────────────────
+    local task_line; task_line="$(_render_task_line)" || true
+    if [[ -n "$task_line" ]]; then printf '%s\n' "$task_line"; fi
+    return 0
+}
+
+main
