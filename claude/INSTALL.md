@@ -4,7 +4,7 @@
 
 ```
 [Claude Sonnet 4] payments-service @main | ctx [██████████] 61% | $0.84
-Tasks [██████░░░░] 6/10 (~4m left) | ✓6 ⟳1 ○3
+Tasks [██████░░░░] 6/10 (~4m left) | ✅3 🔄1 🕐1
 ```
 
 **Line 1** — model, git repo/branch, context window usage, cost (or token count on Bedrock).  
