@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code statusLine hook — outputs two lines:
-#   [Model] repo @branch | ctx [bar] N% | $cost
-#   Tasks [bar] N/N (~Xm left) | ✓N ⟳N ○N
+#   Model [session] 📁 repo 🌿 branch | ctx bar N% | 💰 $cost | ⏱️ api/total | e:level 🧠
+#   Tasks bar N/N (~Xm left) | ✅N 🔄N 🕐N
 #
 # Requires: jq, git
 # Debug: STATUS_BAR_DEBUG=1 dumps the raw JSON payload to /tmp/claude_status_debug.json
@@ -39,22 +39,34 @@ _check_deps() {
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 _build_bar() {
-    local pct="$1" width="${2:-$BAR_WIDTH}"
+    local pct="$1" width="${2:-$BAR_WIDTH}" color_pct="${3:-}"
     pct=$(( pct < 0 ? 0 : pct > 100 ? 100 : pct ))
     local filled=$(( pct * width / 100 ))
     local empty=$(( width - filled ))
-    local bar="[" i
+    local color="" reset=""
+    if [[ -n "$color_pct" ]]; then
+        if   (( pct >= 90 )); then color='\033[31m'
+        elif (( pct >= 70 )); then color='\033[33m'
+        else                       color='\033[32m'
+        fi
+        reset='\033[0m'
+    fi
+    local bar="" i
+    [[ -n "$color" ]] && bar+="$color"
     for ((i = 0; i < filled; i++)); do bar+="█"; done
+    [[ -n "$reset" ]] && bar+="$reset"
     for ((i = 0; i < empty;  i++)); do bar+="░"; done
-    bar+="]"
-    printf '%s' "$bar"
+    printf '%b' "$bar"
 }
 
 _normalize_model() {
     local raw="$1"
     [[ -z "$raw" ]] && { printf 'Claude'; return; }
-    # Already a display name (contains spaces)
-    [[ "$raw" == *" "* ]] && { printf '%s' "$raw"; return; }
+    # Already a display name (contains spaces) — strip leading "Claude " prefix
+    if [[ "$raw" == *" "* ]]; then
+        printf '%s' "${raw/#Claude /}"
+        return
+    fi
     # Strip Bedrock ARN wrapper: anthropic.claude-...:version
     local name="${raw#anthropic.}"
     name="${name%%:*}"
@@ -62,23 +74,23 @@ _normalize_model() {
     name="${name//-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/}"
     name="${name%-v*([0-9])}"
     case "$name" in
-        claude-3-5-sonnet*) printf 'Claude 3.5 Sonnet' ;;
-        claude-3-5-haiku*)  printf 'Claude 3.5 Haiku'  ;;
-        claude-3-7-sonnet*) printf 'Claude 3.7 Sonnet' ;;
-        claude-3-opus*)     printf 'Claude 3 Opus'     ;;
-        claude-3-sonnet*)   printf 'Claude 3 Sonnet'   ;;
-        claude-3-haiku*)    printf 'Claude 3 Haiku'    ;;
-        claude-sonnet-4-6*) printf 'Claude Sonnet 4.6' ;;
-        claude-sonnet-4-5*) printf 'Claude Sonnet 4.5' ;;
-        claude-opus-4-8*)   printf 'Claude Opus 4.8'   ;;
-        claude-opus-4-7*)   printf 'Claude Opus 4.7'   ;;
-        claude-haiku-4-5*)  printf 'Claude Haiku 4.5'  ;;
-        claude-sonnet-4*)   printf 'Claude Sonnet 4'   ;;
-        claude-opus-4*)     printf 'Claude Opus 4'     ;;
-        claude-haiku-4*)    printf 'Claude Haiku 4'    ;;
-        *)  # generic: claude-foo-bar → Claude foo bar
+        claude-3-5-sonnet*) printf '3.5 Sonnet' ;;
+        claude-3-5-haiku*)  printf '3.5 Haiku'  ;;
+        claude-3-7-sonnet*) printf '3.7 Sonnet' ;;
+        claude-3-opus*)     printf '3 Opus'     ;;
+        claude-3-sonnet*)   printf '3 Sonnet'   ;;
+        claude-3-haiku*)    printf '3 Haiku'    ;;
+        claude-sonnet-4-6*) printf 'Sonnet 4.6' ;;
+        claude-sonnet-4-5*) printf 'Sonnet 4.5' ;;
+        claude-opus-4-8*)   printf 'Opus 4.8'   ;;
+        claude-opus-4-7*)   printf 'Opus 4.7'   ;;
+        claude-haiku-4-5*)  printf 'Haiku 4.5'  ;;
+        claude-sonnet-4*)   printf 'Sonnet 4'   ;;
+        claude-opus-4*)     printf 'Opus 4'     ;;
+        claude-haiku-4*)    printf 'Haiku 4'    ;;
+        *)  # generic: claude-foo-bar → foo bar (strip leading "claude ")
             local out="${name//-/ }"
-            printf '%s' "${out/#claude /Claude }" ;;
+            printf '%s' "${out/#claude /}" ;;
     esac
 }
 
@@ -106,6 +118,18 @@ _format_time() {
         local h=$(( secs / 3600 )) m=$(( (secs % 3600) / 60 ))
         (( m == 0 )) && printf '~%dh left' "$h" \
                      || printf '~%dh %dm left' "$h" "$m"
+    fi
+}
+
+_format_ms() {
+    # Converts milliseconds to compact Xm Ys or Xs string.
+    local ms="$1"
+    local secs=$(( ms / 1000 ))
+    local m=$(( secs / 60 )) s=$(( secs % 60 ))
+    if (( m > 0 )); then
+        printf '%dm%ds' "$m" "$s"
+    else
+        printf '%ds' "$s"
     fi
 }
 
@@ -188,11 +212,13 @@ _render_task_line() {
 # Decodes the Claude Code stdin JSON with one jq pass.
 # Output variables (declared local by the caller):
 #   model_raw cwd pct cost cost_class token_count session_id
+#   api_duration_ms total_duration_ms effort_level thinking_enabled session_name
 _parse_payload() {
     local input="$1"
 
     # Extract every stdin field with ONE jq pass. Order of emitted lines:
-    #   model_raw, cwd, pct, cost, cost_class, token_count, session_id
+    #   model_raw, cwd, pct, cost, cost_class, token_count, session_id,
+    #   api_duration_ms, total_duration_ms, effort_level, thinking_enabled, session_name
     local payload
     payload="$(jq -r '
         (.cost.total_cost_usd // .session.cost_usd // .usage.total_cost_usd // 0) as $cost |
@@ -209,7 +235,12 @@ _parse_payload() {
         $cost,
         (if $cost > 0 then (if $cost < 0.01 then "sub" else "normal" end) else "none" end),
         $tok,
-        (.session_id // "")
+        (.session_id // ""),
+        (.cost.total_api_duration_ms // 0 | floor),
+        (.cost.total_duration_ms     // 0 | floor),
+        (.effort.level               // ""),
+        ((.thinking.enabled // false) | if . then "true" else "false" end),
+        (.session_name // "")
     ' <<< "$input" 2>/dev/null)" || payload=""
 
     # shellcheck disable=SC2034  # assigned into the caller's locals (dynamic scope)
@@ -221,12 +252,19 @@ _parse_payload() {
         IFS= read -r cost_class
         IFS= read -r token_count
         IFS= read -r session_id
+        IFS= read -r api_duration_ms
+        IFS= read -r total_duration_ms
+        IFS= read -r effort_level
+        IFS= read -r thinking_enabled
+        IFS= read -r session_name
     } <<< "$payload" || true
 
     # Guards: ensure numerics are sane
-    [[ "$pct"         =~ ^[0-9]+$          ]] || pct="0"
-    [[ "$cost"        =~ ^[0-9]+\.?[0-9]*$ ]] || cost="0"
-    [[ "$token_count" =~ ^[0-9]+$          ]] || token_count="0"
+    [[ "$pct"              =~ ^[0-9]+$          ]] || pct="0"
+    [[ "$cost"             =~ ^[0-9]+\.?[0-9]*$ ]] || cost="0"
+    [[ "$token_count"      =~ ^[0-9]+$          ]] || token_count="0"
+    [[ "$api_duration_ms"  =~ ^[0-9]+$          ]] || api_duration_ms="0"
+    [[ "$total_duration_ms" =~ ^[0-9]+$         ]] || total_duration_ms="0"
     return 0
 }
 
@@ -269,6 +307,7 @@ main() {
 
     # ── Parse the stdin payload (jq) ───────────────────────────────────────────
     local model_raw="" cwd="" pct="0" cost="0" cost_class="none" token_count="0" session_id=""
+    local api_duration_ms="0" total_duration_ms="0" effort_level="" thinking_enabled="false" session_name=""
     _parse_payload "$input"
 
     local model; model="$(_normalize_model "${model_raw:-}")"
@@ -277,23 +316,40 @@ main() {
     local repo_name="" branch="" dirty=""
     _git_info "$cwd"
 
-    # ── Context bar ───────────────────────────────────────────────────────────
-    local ctx_bar; ctx_bar="$(_build_bar "$pct")"
+    # ── Context bar (colored) ─────────────────────────────────────────────────
+    local ctx_bar; ctx_bar="$(_build_bar "$pct" "$BAR_WIDTH" "$pct")"
 
     # ── Cost / token field ────────────────────────────────────────────────────
     local cost_field=""
     case "$cost_class" in
-        normal) cost_field="$(printf '$%.2f' "$cost")" ;;
-        sub)    cost_field="$(printf '$%.4f' "$cost")" ;;
+        normal) cost_field="💰 $(printf '$%.2f' "$cost")" ;;
+        sub)    cost_field="💰 $(printf '$%.4f' "$cost")" ;;
         none)   [[ "$token_count" -gt 0 ]] && cost_field="~$(_format_tokens "$token_count") tok" ;;
     esac
 
+    # ── Duration field ────────────────────────────────────────────────────────
+    local duration_field=""
+    if [[ "$total_duration_ms" -gt 0 ]]; then
+        duration_field="⏱️ $(_format_ms "$api_duration_ms")/$(_format_ms "$total_duration_ms")"
+    fi
+
+    # ── Effort / thinking field ───────────────────────────────────────────────
+    local effort_field=""
+    if [[ -n "$effort_level" && "$effort_level" != "medium" ]]; then
+        effort_field="e:${effort_level}"
+    fi
+    [[ "$thinking_enabled" == "true" ]] && effort_field+="${effort_field:+ }🧠"
+
     # ── Line 1 ────────────────────────────────────────────────────────────────
-    local line1="[${model}] ${repo_name}"
-    [[ -n "$branch" ]] && line1+=" @${branch}${dirty}"
+    local line1="$model"
+    [[ -n "$session_name" ]] && line1+=" ${session_name}"
+    line1+=" 📁 ${repo_name}"
+    [[ -n "$branch" ]] && line1+=" 🌿 ${branch}${dirty}"
     line1+=" | ctx ${ctx_bar} ${pct}%"
-    [[ -n "$cost_field" ]] && line1+=" | $cost_field"
-    printf '%s\n' "$line1"
+    [[ -n "$cost_field"     ]] && line1+=" | $cost_field"
+    [[ -n "$duration_field" ]] && line1+=" | $duration_field"
+    [[ -n "$effort_field"   ]] && line1+=" | $effort_field"
+    printf '%b\n' "$line1"
 
     # ── Line 2: task progress ─────────────────────────────────────────────────
     local session_file="$SESSIONS_DIR/${session_id}.json"
