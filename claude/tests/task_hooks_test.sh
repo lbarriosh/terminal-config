@@ -52,7 +52,7 @@ check "PreToolUse(TaskCreate) → pending" "pending" "$(jq_field "$SESS_DIR/s1.j
 # ─── Case 2: TaskCompleted transitions status, appends completion, writes history.json ───
 _fresh_dirs
 printf '{"tasks":{"t1":"pending"},"completions":[]}\n' > "$SESS_DIR/s1.json"
-feed '{"hook_event_name":"TaskCompleted","session_id":"s1","task":{"id":"t1"}}'
+feed '{"hook_event_name":"TaskCompleted","session_id":"s1","task_id":"t1","task_subject":"Do thing"}'
 check "TaskCompleted → completed"              "completed" "$(jq_field "$SESS_DIR/s1.json" '.tasks.t1')"
 check "TaskCompleted → completions count"      "1"         "$(jq_field "$SESS_DIR/s1.json" '.completions | length')"
 check "TaskCompleted → completion id"          "t1"        "$(jq_field "$SESS_DIR/s1.json" '.completions[0].id')"
@@ -72,7 +72,7 @@ check "TaskUpdate completed → completed" "completed" "$(jq_field "$SESS_DIR/s1
 
 # ─── Case 5: _upsert_task creates file from scratch ──────────────────────────
 _fresh_dirs
-feed '{"hook_event_name":"TaskCreated","session_id":"s2","task":{"id":"t1","title":"New"}}'
+feed '{"hook_event_name":"TaskCreated","session_id":"s2","task_id":"t1","task_subject":"New"}'
 check "upsert creates file"  "1"       "$([ -f "$SESS_DIR/s2.json" ] && echo 1 || echo 0)"
 check "upsert valid JSON"    "pending" "$(jq_field "$SESS_DIR/s2.json" '.tasks.t1')"
 

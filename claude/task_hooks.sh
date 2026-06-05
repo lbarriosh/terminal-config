@@ -112,7 +112,7 @@ _on_session_start() {
 _on_task_created() {
     local input="$1" session_file="$2"
     local task_id
-    task_id="$(jq -r '.task.id // ""' <<< "$input")"
+    task_id="$(jq -r '.task_id // ""' <<< "$input")"
     [[ -z "$task_id" ]] && return 0
     _upsert_task "$session_file" "$task_id" "pending" ""
 }
@@ -120,7 +120,7 @@ _on_task_created() {
 _on_task_completed() {
     local input="$1" session_file="$2"
     local task_id now
-    task_id="$(jq -r '.task.id // ""' <<< "$input")"
+    task_id="$(jq -r '.task_id // ""' <<< "$input")"
     [[ -z "$task_id" ]] && return 0
     now="$(date +%s)"
     _upsert_task "$session_file" "$task_id" "completed" "$now"
