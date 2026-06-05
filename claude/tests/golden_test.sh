@@ -23,6 +23,12 @@ EMPTY="$(mktemp -d)"          # empty sessions + history dir for line-1-only cas
 CLEAN=("$EMPTY")
 trap 'rm -rf "${CLEAN[@]}"' EXIT
 
+# ANSI color codes (actual ESC bytes) used in expected-string literals
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+RED=$'\033[31m'
+RESET=$'\033[0m'
+
 # render <json> <sessions_dir> <hist_dir> [extra env KEY=VAL ...]
 render() {
     local json="$1" sd="$2" hd="$3"; shift 3
@@ -91,38 +97,38 @@ make_history() {
 # ─── Line-1 formatting cases (non-git, no tasks) ───────────────────────────────
 
 check "A: normal cost (2dp), display-name model" \
-'[Claude Sonnet 4] tmp | ctx [██████░░░░] 61% | $0.84' \
+"Sonnet 4 📁 tmp | ctx ${GREEN}██████${RESET}░░░░ 61% | 💰 \$0.84" \
 "$(render '{"session_id":"s-a","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":61,"context_window_size":200000},"cost":{"total_cost_usd":0.8399}}' "$EMPTY" "$EMPTY")"
 
 check "B: sub-cent cost (4dp)" \
-'[Claude Haiku 4] tmp | ctx [░░░░░░░░░░] 5% | $0.0042' \
+"Haiku 4 📁 tmp | ctx ${GREEN}${RESET}░░░░░░░░░░ 5% | 💰 \$0.0042" \
 "$(render '{"session_id":"s-b","model":{"display_name":"Claude Haiku 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":5},"cost":{"total_cost_usd":0.0042}}' "$EMPTY" "$EMPTY")"
 
 check "C: Bedrock ARN -> token fallback" \
-'[Claude 3.5 Sonnet] tmp | ctx [████░░░░░░] 43% | ~86k tok' \
+"3.5 Sonnet 📁 tmp | ctx ${GREEN}████${RESET}░░░░░░ 43% | ~86k tok" \
 "$(render '{"session_id":"s-c","model":{"id":"anthropic.claude-3-5-sonnet-20241022-v2:0"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":43,"context_window_size":200000,"total_input_tokens":86000},"cost":{"total_cost_usd":0}}' "$EMPTY" "$EMPTY")"
 
 check "D: Bedrock total_input_tokens direct" \
-'[Claude Sonnet 4.5] tmp | ctx [███░░░░░░░] 30% | ~62k tok' \
+"Sonnet 4.5 📁 tmp | ctx ${GREEN}███${RESET}░░░░░░░ 30% | ~62k tok" \
 "$(render '{"session_id":"s-d","model":{"id":"anthropic.claude-sonnet-4-5:0"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":30,"total_input_tokens":62000,"context_window_size":200000},"cost":{"total_cost_usd":0}}' "$EMPTY" "$EMPTY")"
 
 check "E: bare-string model + no cost field" \
-'[Claude Opus 4.8] tmp | ctx [█░░░░░░░░░] 12%' \
+"Opus 4.8 📁 tmp | ctx ${GREEN}█${RESET}░░░░░░░░░ 12%" \
 "$(render '{"session_id":"s-e","model":"claude-opus-4-8-20250101","workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":12},"cost":{"total_cost_usd":0}}' "$EMPTY" "$EMPTY")"
 
 check "F: empty JSON payload" \
-'[Claude] unknown | ctx [░░░░░░░░░░] 0%' \
+"Claude 📁 unknown | ctx ${GREEN}${RESET}░░░░░░░░░░ 0%" \
 "$(render '{}' "$EMPTY" "$EMPTY")"
 
 check "G: pct clamp >100" \
-'[Claude x] tmp | ctx [██████████] 150%' \
+"x 📁 tmp | ctx ${RED}██████████${RESET} 150%" \
 "$(render '{"session_id":"s-g","model":{"id":"claude-x"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":150},"cost":{"total_cost_usd":0}}' "$EMPTY" "$EMPTY")"
 
 # ─── Git fixture (branch + dirty counts) ───────────────────────────────────────
 
 GIT_REPO="$(make_git_repo)"
-check "H: git repo @testbranch (dirty state not shown)" \
-'[Claude Sonnet 4] repo @testbranch | ctx [█████░░░░░] 50% | $2.00' \
+check "H: git repo 🌿 testbranch (dirty state not shown)" \
+"Sonnet 4 📁 repo 🌿 testbranch | ctx ${GREEN}█████${RESET}░░░░░ 50% | 💰 \$2.00" \
 "$(render '{"session_id":"s-h","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"'"$GIT_REPO"'"},"context_window":{"used_percentage":50},"cost":{"total_cost_usd":2}}' "$EMPTY" "$EMPTY" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)"
 
 # ─── Task line cases ───────────────────────────────────────────────────────────
@@ -131,18 +137,20 @@ check "H: git repo @testbranch (dirty state not shown)" \
 SID_I="test-session-i"
 SESS_I="$(make_session "$SID_I" '{"tasks":{"a":"completed","b":"completed","c":"in_progress","d":"pending","e":"pending"},"completions":[{"id":"a","timestamp":1000},{"id":"b","timestamp":1100}]}')"
 HIST_I="$(mktemp -d)"; CLEAN+=("$HIST_I")
+EXP_I="Sonnet 4 📁 tmp | ctx ${GREEN}████${RESET}░░░░░░ 40% | 💰 \$0.50
+Tasks ████░░░░░░ 2/5 | ✅2 🔄1 🕐2"
 check "I: task line calculating..." \
-'[Claude Sonnet 4] tmp | ctx [████░░░░░░] 40% | $0.50
-Tasks [████░░░░░░] 2/5 | ✅2 🔄1 🕐2' \
+"$EXP_I" \
 "$(render '{"session_id":"'"$SID_I"'","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":40},"cost":{"total_cost_usd":0.5}}' "$SESS_I" "$HIST_I")"
 
 # J: history seeded with ema=60, remaining=2 → est=120s → "~2m left"
 SID_J="test-session-j"
 SESS_J="$(make_session "$SID_J" '{"tasks":{"h1":"completed","h2":"completed","h3":"completed","i1":"in_progress","p1":"pending"},"completions":[{"id":"h1","timestamp":1000},{"id":"h2","timestamp":1100},{"id":"h3","timestamp":1200}]}')"
 HIST_J="$(make_history '{"completions":[{"id":"h1","timestamp":1000},{"id":"h2","timestamp":1100},{"id":"h3","timestamp":1200}],"ema_seconds":60}')"
+EXP_J="Sonnet 4 📁 tmp | ctx ${GREEN}██████${RESET}░░░░ 60% | 💰 \$0.50
+Tasks ██████░░░░ 3/5 (~2m left) | ✅3 🔄1 🕐1"
 check "J: task line EMA ~2m left" \
-'[Claude Sonnet 4] tmp | ctx [██████░░░░] 60% | $0.50
-Tasks [██████░░░░] 3/5 (~2m left) | ✅3 🔄1 🕐1' \
+"$EXP_J" \
 "$(render '{"session_id":"'"$SID_J"'","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":60},"cost":{"total_cost_usd":0.5}}' "$SESS_J" "$HIST_J")"
 
 # K: all tasks complete, last completion within DONE_DISPLAY_SECS → "All done!"
@@ -150,10 +158,43 @@ NOW="$(date +%s)"
 SID_K="test-session-k"
 SESS_K="$(make_session "$SID_K" '{"tasks":{"d1":"completed","d2":"completed"},"completions":[{"id":"d1","timestamp":'"$((NOW - 5))"'},{"id":"d2","timestamp":'"$((NOW - 3))"'}]}')"
 HIST_K="$(make_history '{"completions":[{"id":"d1","timestamp":'"$((NOW - 5))"'},{"id":"d2","timestamp":'"$((NOW - 3))"'}],"ema_seconds":30}')"
+EXP_K="Sonnet 4 📁 tmp | ctx ${YELLOW}████████${RESET}░░ 80% | 💰 \$0.12
+All done! (2 tasks)"
 check "K: all done message" \
-'[Claude Sonnet 4] tmp | ctx [████████░░] 80% | $0.12
-All done! (2 tasks)' \
+"$EXP_K" \
 "$(render '{"session_id":"'"$SID_K"'","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":80},"cost":{"total_cost_usd":0.12}}' "$SESS_K" "$HIST_K")"
+
+# ─── New fields ────────────────────────────────────────────────────────────────
+
+check "L: session_name prepends before repo" \
+"Sonnet 4 my-work 📁 tmp | ctx ${GREEN}███${RESET}░░░░░░░ 30% | 💰 \$0.05" \
+"$(render '{"session_id":"s-l","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":30},"cost":{"total_cost_usd":0.05},"session_name":"my-work"}' "$EMPTY" "$EMPTY")"
+
+check "M: effort=high + thinking=true" \
+"Sonnet 4 📁 tmp | ctx ${GREEN}███${RESET}░░░░░░░ 30% | 💰 \$0.05 | e:high 🧠" \
+"$(render '{"session_id":"s-m","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":30},"cost":{"total_cost_usd":0.05},"effort":{"level":"high"},"thinking":{"enabled":true}}' "$EMPTY" "$EMPTY")"
+
+check "N: effort=medium + thinking=false → no effort field" \
+"Sonnet 4 📁 tmp | ctx ${GREEN}███${RESET}░░░░░░░ 30% | 💰 \$0.05" \
+"$(render '{"session_id":"s-n","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":30},"cost":{"total_cost_usd":0.05},"effort":{"level":"medium"},"thinking":{"enabled":false}}' "$EMPTY" "$EMPTY")"
+
+check "O: dual duration api/total" \
+"Sonnet 4 📁 tmp | ctx ${GREEN}███${RESET}░░░░░░░ 30% | 💰 \$0.05 | ⏱️ 1m23s/5m10s" \
+"$(render '{"session_id":"s-o","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":30},"cost":{"total_cost_usd":0.05,"total_api_duration_ms":83000,"total_duration_ms":310000}}' "$EMPTY" "$EMPTY")"
+
+# ─── Context bar color thresholds ──────────────────────────────────────────────
+
+check "P1: ctx bar green (pct=45)" \
+"Sonnet 4 📁 tmp | ctx ${GREEN}████${RESET}░░░░░░ 45%" \
+"$(render '{"session_id":"s-p1","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":45},"cost":{"total_cost_usd":0}}' "$EMPTY" "$EMPTY")"
+
+check "P2: ctx bar yellow (pct=75)" \
+"Sonnet 4 📁 tmp | ctx ${YELLOW}███████${RESET}░░░ 75%" \
+"$(render '{"session_id":"s-p2","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":75},"cost":{"total_cost_usd":0}}' "$EMPTY" "$EMPTY")"
+
+check "P3: ctx bar red (pct=95)" \
+"Sonnet 4 📁 tmp | ctx ${RED}█████████${RESET}░ 95%" \
+"$(render '{"session_id":"s-p3","model":{"display_name":"Claude Sonnet 4"},"workspace":{"current_dir":"/tmp"},"context_window":{"used_percentage":95},"cost":{"total_cost_usd":0}}' "$EMPTY" "$EMPTY")"
 
 # ─── Result ────────────────────────────────────────────────────────────────────
 if [[ "$BLESS" == "1" ]]; then
