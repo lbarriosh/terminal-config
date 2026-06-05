@@ -3,12 +3,25 @@
 `status_bar.sh` is a Claude Code `statusLine` hook that renders two lines:
 
 ```
-[Claude Sonnet 4] payments-service @main | ctx [██████████] 61% | $0.84
-Tasks [██████░░░░] 6/10 (~4m left) | ✅3 🔄1 🕐1
+Sonnet 4 my-session 📁 payments-service 🌿 main | ctx ██████████ 61% | 💰 $0.84 | ⏱️ 1m20s/5m0s | e:high 🧠
+Tasks ██████░░░░ 6/10 (~4m left) | ✅3 🔄1 🕐1
 ```
 
-**Line 1** — model, git repo/branch, context window usage, cost (or token count on Bedrock).  
+**Line 1** — model (without "Claude" prefix), optional session name, 📁 git repo, 🌿 branch, color-coded context bar, 💰 cost (or token count on Bedrock), ⏱️ API/total duration, and effort level + thinking indicator when non-default.  
 **Line 2** — task progress bar with EMA-based time estimate (hidden when no tasks exist).
+
+### Context bar colors
+
+The bar changes color based on usage: green below 70 %, yellow from 70–89 %, red at 90 %+.
+
+### New fields (v2)
+
+| Field | Shown when |
+|-------|-----------|
+| `session_name` | Set via `--name` flag or `/rename` |
+| ⏱️ `api_duration / total_duration` | Session has been active (total > 0) |
+| `e:level` | `effort.level` is present and not `medium` |
+| 🧠 | `thinking.enabled` is `true` |
 
 ## Prerequisites
 
