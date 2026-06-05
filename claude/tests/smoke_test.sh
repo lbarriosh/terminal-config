@@ -116,4 +116,16 @@ _run "All tasks complete – All done! message" '{
 }' "SESSIONS_DIR_OVERRIDE=$SESS_TMP HISTORY_DIR_OVERRIDE=$HIST_TMP"
 rm -rf "$SESS_TMP" "$HIST_TMP"
 
+# 9) New fields: session_name, effort, thinking, dual duration
+_run "New fields: session_name + effort:high + thinking + duration" '{
+  "session_id": "smoke-9",
+  "model": {"display_name": "Claude Sonnet 4.6"},
+  "workspace": {"current_dir": "/tmp"},
+  "context_window": {"used_percentage": 55},
+  "cost": {"total_cost_usd": 0.07, "total_api_duration_ms": 45000, "total_duration_ms": 180000},
+  "effort": {"level": "high"},
+  "thinking": {"enabled": true},
+  "session_name": "my-feature"
+}'
+
 printf '\n✓ All tests ran (exit 0 = no crashes)\n'
