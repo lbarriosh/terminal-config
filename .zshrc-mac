@@ -37,8 +37,10 @@ function sshAddToKeychain() {
     env APPLE_SSH_ADD_BEHAVIOR=macos ssh-add -K "$1"
 } 
 
-# Start the SSH agent if it's not running
-eval "$(ssh-agent -s > /dev/null)"
+# Start the SSH agent if not already running
+if [ -z "$SSH_AUTH_SOCK" ] || ! ssh-add -l &>/dev/null; then
+    eval "$(ssh-agent -s)" > /dev/null
+fi
 
 # Parameterize this via ~/.zshenv in your machine
 if [ -z "$DISABLE_ASDF" ] || [ "$DISABLE_ASDF" = false ]; then
